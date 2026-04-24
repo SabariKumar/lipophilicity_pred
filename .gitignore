@@ -12,6 +12,7 @@ docs/reference/*
 
 # Python ignores
 __pycache__/
+__marimo__/
 src/validation/__pycache__/
 src/validation/__pycache__/*.pyc
 *.pyc
