@@ -1,10 +1,11 @@
 from collections import namedtuple
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
 import rdkit
 from rdkit.Chem import FunctionalGroups
 
-_Pattern = namedtuple('pattern', 'smarts mol')
+_Pattern = namedtuple("pattern", "smarts mol")
+
 
 def _flatten_fgs(fgs: List) -> Tuple[List, Dict]:
     """
@@ -27,6 +28,7 @@ def _flatten_fgs(fgs: List) -> Tuple[List, Dict]:
 
 _FG_NAMES: List[str] | None = None
 _FG_DEFS: Dict | None = None
+
 
 def _get_fg_library() -> Tuple[List[str], Dict]:
     """
@@ -55,6 +57,5 @@ def get_mol_fgs(mol: rdkit.Chem.rdchem.Mol) -> Dict[str, int]:
     """
     all_fg_names, all_fg_defs = _get_fg_library()
     return {
-        fgn: int(mol.HasSubstructMatch(all_fg_defs[fgn].mol))
-        for fgn in all_fg_names
+        fgn: int(mol.HasSubstructMatch(all_fg_defs[fgn].mol)) for fgn in all_fg_names
     }
