@@ -63,7 +63,7 @@ def _(desc_df, mo):
 def _(desc_df, df):
     import matplotlib.pyplot as plt
 
-    def fig1():
+    def _():
         fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
         axes[0].hist(df["Y"], bins=40, edgecolor="white", linewidth=0.4)
@@ -83,13 +83,13 @@ def _(desc_df, df):
         plt.tight_layout()
         return fig
 
-    fig1()
+    _()
     return
 
 
 @app.cell
 def _(desc_df, mo):
-    def fig2():
+    def _():
         import matplotlib.pyplot as plt
         import numpy as np
 
@@ -125,39 +125,56 @@ def _(desc_df, mo):
             ]
         )
 
-    fig2()
-    return
-
-
-@app.cell
-def _():
+    _()
     return
 
 
 @app.cell
 def _(df, mo):
-    import matplotlib.pyplot as plt
+    def _():
+        import matplotlib.pyplot as plt
 
-    from src.features import smiles_to_fgs
+        from src.features import smiles_to_fgs
 
-    fg_df = smiles_to_fgs(df["Drug"])
+        fg_df = smiles_to_fgs(df["Drug"])
 
-    counts = fg_df.sum().sort_values(ascending=True)
+        counts = fg_df.sum().sort_values(ascending=True)
 
-    fig, ax = plt.subplots(figsize=(8, max(4, len(counts) * 0.22)))
-    ax.barh(counts.index, counts.values)
-    ax.set_xlabel("Number of molecules")
-    ax.set_title("Functional group prevalence across dataset")
-    plt.tight_layout()
+        fig, ax = plt.subplots(figsize=(8, max(4, len(counts) * 0.22)))
+        ax.barh(counts.index, counts.values)
+        ax.set_xlabel("Number of molecules")
+        ax.set_title("Functional group prevalence across dataset")
+        plt.tight_layout()
+        return mo.vstack(
+            [
+                fig,
+                mo.md(
+                    f"**{(counts == 0).sum()}** functional groups absent in all molecules"
+                ),
+            ]
+        )
 
-    mo.vstack(
-        [
-            fig,
-            mo.md(
-                f"**{(counts == 0).sum()}** functional groups absent in all molecules"
-            ),
-        ]
-    )
+    _()
+    return
+
+
+@app.cell
+def _(desc_df, df):
+    def _():
+        import matplotlib.pyplot as plt
+
+        clogp = desc_df["MolLogP"].dropna()
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.hist(clogp, bins=40, edgecolor="white", linewidth=0.4)
+        ax.set_xlabel("ClogP (MolLogP)")
+        ax.set_ylabel("Count")
+        ax.set_title(f"ClogP distribution (n={len(clogp):,} / {len(df):,})")
+        plt.tight_layout()
+        return fig
+
+    _()
+    return
 
 
 if __name__ == "__main__":
