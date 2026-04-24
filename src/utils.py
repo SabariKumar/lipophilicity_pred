@@ -1,7 +1,7 @@
 from collections import namedtuple
 from typing import Dict, List, Tuple
 
-import rdkit
+from rdkit import Chem
 from rdkit.Chem import FunctionalGroups
 
 _Pattern = namedtuple("pattern", "smarts mol")
@@ -46,12 +46,12 @@ def _get_fg_library() -> Tuple[List[str], Dict]:
     return _FG_NAMES, _FG_DEFS
 
 
-def get_mol_fgs(mol: rdkit.Chem.rdchem.Mol) -> Dict[str, int]:
+def get_mol_fgs(mol: Chem.Mol) -> Dict[str, int]:
     """
     Return binary functional group presence for a single molecule.
 
     Params:
-        mol: rdkit.Chem.rdchem.Mol : input rdkit mol object
+        mol: Chem.Mol : input rdkit mol object
     Returns:
         Dict[str, int] : mapping of fg name to 1 (present) or 0 (absent)
     """

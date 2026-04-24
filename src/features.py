@@ -18,7 +18,7 @@ def get_mol_descriptors(mol, missingVal=None) -> dict:
     for nm, fn in Descriptors._descList:
         try:
             val = fn(mol)
-        except:
+        except Exception:
             traceback.print_exc()
             val = missingVal
         res[nm] = val
