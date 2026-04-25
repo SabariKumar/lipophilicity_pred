@@ -45,6 +45,8 @@ pre-commit = ">=4.6.0,<5"
 
 [pypi-dependencies]
 lipophilicity-pred = { path = ".", editable = true }
+chemprop = ">=2.0"
+captum = ">=0.7"
 
 [tasks]
 # Run once after `pixi install` to get the pre-built DGL wheel for the installed torch+CUDA version
@@ -57,6 +59,9 @@ setup-dgl = """
 # both incompatible with our conda rdkit. Install without deps since rdkit,
 # pandas, numpy, scikit-learn, and tqdm are all already provided by conda.
 setup-tdc = "python -m pip install PyTDC --no-deps"
+
+# --- training ---
+train-gnn = "python scripts/train_gnn.py"
 
 # --- tests ---
 test = "pytest tests/ -v"
