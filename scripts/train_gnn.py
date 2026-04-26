@@ -69,6 +69,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="directory for Lightning model checkpoints",
     )
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument(
+        "--split",
+        type=str,
+        default=None,
+        choices=["stratified_scaffold", "random", "tdc_scaffold"],
+        help="train/valid/test split strategy (default: stratified_scaffold)",
+    )
     # Wandb
     p.add_argument(
         "--wandb-project",
@@ -117,6 +124,7 @@ def main() -> None:
         "seed": args.seed,
         "wandb_project": args.wandb_project,
         "wandb_run_name": args.wandb_run_name,
+        "split": args.split,
     }
     cfg.update({k: v for k, v in cli_overrides.items() if v is not None})
 
