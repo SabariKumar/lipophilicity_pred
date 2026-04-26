@@ -97,3 +97,7 @@ SECRETS.py
 .ipynb_checkpoints
 sandbox/
 results/
+checkpoints/
+lightning_logs/
+tea_debug.log
+pyrightconfig.json
