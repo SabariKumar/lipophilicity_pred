@@ -23,6 +23,14 @@ import yaml
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """
+    Build the argument parser for the training script.
+
+    Params:
+        None
+    Returns:
+        argparse.ArgumentParser : configured parser with all training flags
+    """
     p = argparse.ArgumentParser(
         description="Train GNN + ChemBERTa lipophilicity model",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -61,6 +69,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="directory for Lightning model checkpoints",
     )
     p.add_argument("--seed", type=int, default=None)
+    # Wandb
+    p.add_argument(
+        "--wandb-project",
+        type=str,
+        default=None,
+        help="W&B project name (default: lipophilicity_pred)",
+    )
+    p.add_argument(
+        "--wandb-run-name",
+        type=str,
+        default=None,
+        help="W&B run name; auto-generated if omitted",
+    )
     return p
 
 
@@ -94,6 +115,8 @@ def main() -> None:
         "patience": args.patience,
         "checkpoint_path": args.backbone_checkpoint,
         "seed": args.seed,
+        "wandb_project": args.wandb_project,
+        "wandb_run_name": args.wandb_run_name,
     }
     cfg.update({k: v for k, v in cli_overrides.items() if v is not None})
 

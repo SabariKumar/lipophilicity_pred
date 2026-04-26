@@ -8,6 +8,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from chemprop.data import build_dataloader
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.loggers import CSVLogger, WandbLogger
+from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from src.data import get_splits
@@ -38,10 +41,10 @@ def evaluate_gnn(
     preds, targets = [], []
     with torch.no_grad():
         for batch in loader:
-            bmg = batch.bmg.to(device)
+            batch.bmg.to(device)  # in-place; BatchMolGraph.to() has no return value
             X_d = batch.X_d.to(device) if batch.X_d is not None else None
             Y = batch.Y.squeeze(-1)
-            out = model(bmg, X_d).squeeze(-1).cpu()
+            out = model(batch.bmg, X_d).squeeze(-1).cpu()
             preds.append(out.numpy())
             targets.append(Y.numpy())
     y_pred = np.concatenate(preds)
@@ -67,6 +70,7 @@ class GNNLitModule(L.LightningModule):
         lr: float = 1e-3,
         weight_decay: float = 1e-4,
         t_max: int = 100,
+        model_kwargs: dict | None = None,
     ) -> None:
         """
         Wrap a LipophilicityGNN for Lightning training.
@@ -76,6 +80,8 @@ class GNNLitModule(L.LightningModule):
             lr: float : AdamW learning rate
             weight_decay: float : AdamW weight decay
             t_max: int : CosineAnnealingLR period in epochs
+            model_kwargs: dict | None : LipophilicityGNN constructor kwargs, embedded
+                in the checkpoint so load_checkpoint can reconstruct the architecture
         Returns:
             None
         """
@@ -85,6 +91,18 @@ class GNNLitModule(L.LightningModule):
         self.weight_decay = weight_decay
         self.t_max = t_max
         self.loss_fn = nn.MSELoss()
+        self._model_kwargs: dict = model_kwargs or {}
+
+    def on_save_checkpoint(self, checkpoint: dict) -> None:
+        """
+        Embed model architecture kwargs in the checkpoint for self-contained loading.
+
+        Params:
+            checkpoint: dict : Lightning checkpoint dict (mutated in place)
+        Returns:
+            None
+        """
+        checkpoint["model_kwargs"] = self._model_kwargs
 
     def _step(self, batch, split: str) -> torch.Tensor:
         bmg = batch.bmg
@@ -98,43 +116,43 @@ class GNNLitModule(L.LightningModule):
         self.log(f"{split}_mae", mae, prog_bar=(split == "val"), batch_size=len(Y))
         return loss
 
-    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Any, _batch_idx: int) -> torch.Tensor:
         """
         Compute MSE loss for a training batch.
 
         Params:
             batch: Any : chemprop TrainingBatch
-            batch_idx: int : batch index (unused)
+            _batch_idx: int : batch index (unused)
         Returns:
             torch.Tensor : scalar MSE loss
         """
         return self._step(batch, "train")
 
-    def validation_step(self, batch: Any, batch_idx: int) -> None:
+    def validation_step(self, batch: Any, _batch_idx: int) -> None:
         """
         Log validation MAE and loss without returning a value.
 
         Params:
             batch: Any : chemprop TrainingBatch
-            batch_idx: int : batch index (unused)
+            _batch_idx: int : batch index (unused)
         Returns:
             None
         """
         self._step(batch, "val")
 
-    def test_step(self, batch: Any, batch_idx: int) -> None:
+    def test_step(self, batch: Any, _batch_idx: int) -> None:
         """
         Log test MAE and loss without returning a value.
 
         Params:
             batch: Any : chemprop TrainingBatch
-            batch_idx: int : batch index (unused)
+            _batch_idx: int : batch index (unused)
         Returns:
             None
         """
         self._step(batch, "test")
 
-    def configure_optimizers(self) -> dict:
+    def configure_optimizers(self) -> OptimizerLRScheduler:
         """
         Return AdamW optimizer with cosine annealing LR scheduler.
 
@@ -203,7 +221,7 @@ def train_gnn(
     datasets = {
         name: build_chemprop_dataset(
             splits[name]["Drug"],
-            splits[name]["Y"].values,
+            np.asarray(splits[name]["Y"].values, dtype=np.float32),
             lm_embs[name],
         )
         for name in ("train", "valid", "test")
@@ -221,25 +239,40 @@ def train_gnn(
     }
 
     # --- Model ---
-    model = LipophilicityGNN(
-        d_h=cfg["d_h"],
-        d_lm=cfg["d_lm"],
-        d_hidden=cfg["d_hidden"],
-        depth=cfg["depth"],
-        dropout=cfg["dropout"],
-        checkpoint_path=cfg["checkpoint_path"],
-    )
+    model_kwargs = {
+        "d_h": cfg["d_h"],
+        "d_lm": cfg["d_lm"],
+        "d_hidden": cfg["d_hidden"],
+        "depth": cfg["depth"],
+        "dropout": cfg["dropout"],
+        "checkpoint_path": cfg["checkpoint_path"],
+    }
+    model = LipophilicityGNN(**model_kwargs)
     lit = GNNLitModule(
-        model, lr=cfg["lr"], weight_decay=cfg["weight_decay"], t_max=cfg["max_epochs"]
+        model,
+        lr=cfg["lr"],
+        weight_decay=cfg["weight_decay"],
+        t_max=cfg["max_epochs"],
+        model_kwargs=model_kwargs,
     )
 
-    # --- Callbacks ---
-    early_stop = L.pytorch.callbacks.EarlyStopping(
-        monitor="val_mae", patience=cfg["patience"], mode="min"
+    # --- Loggers ---
+    wandb_logger = WandbLogger(
+        project=cfg.get("wandb_project", "lipophilicity_pred"),
+        name=cfg.get("wandb_run_name", None),
+        config=cfg,  # logs all hyperparams including dropout, weight_decay, lr, etc.
     )
-    ckpt_cb = L.pytorch.callbacks.ModelCheckpoint(
+    csv_logger = CSVLogger(save_dir=str(ckpt_dir), name="logs")
+
+    # Trigger wandb lazy init now so we can read the (possibly auto-generated) run name
+    # and embed it in the checkpoint filename for traceability.
+    run_name = wandb_logger.experiment.name
+
+    # --- Callbacks ---
+    early_stop = EarlyStopping(monitor="val_mae", patience=cfg["patience"], mode="min")
+    ckpt_cb = ModelCheckpoint(
         dirpath=ckpt_dir,
-        filename="gnn-best-{epoch:03d}-{val_mae:.4f}",
+        filename=f"{run_name}-{{epoch:03d}}-{{val_mae:.4f}}",
         monitor="val_mae",
         mode="min",
         save_top_k=1,
@@ -252,8 +285,17 @@ def train_gnn(
         gradient_clip_val=1.0,
         log_every_n_steps=1,
         enable_progress_bar=True,
+        logger=[wandb_logger, csv_logger],
     )
     trainer.fit(lit, loaders["train"], loaders["valid"])
+
+    # Copy the per-epoch CSV to a stable path so the notebook can always find it.
+    import shutil
+
+    history_src = Path(csv_logger.log_dir) / "metrics.csv"
+    history_dst = ckpt_dir / "metrics_history.csv"
+    if history_src.exists():
+        shutil.copy(history_src, history_dst)
 
     # Load best weights back into the unwrapped model.
     # Manually strip the "model." prefix that Lightning adds to nested module keys.
@@ -281,21 +323,41 @@ def load_checkpoint(
     """
     Restore a LipophilicityGNN from a Lightning checkpoint written by train_gnn.
 
+    Architecture hyperparameters are read from the checkpoint's embedded
+    model_kwargs (written by GNNLitModule.on_save_checkpoint). Any kwargs
+    passed by the caller override the checkpoint values, which is useful for
+    the rare case of intentional architecture surgery but should not be needed
+    in normal use.
+
     Params:
         checkpoint_path: str | Path : path to the .ckpt file
         device: torch.device | None : target device; defaults to CUDA if available
-        **model_kwargs: passed to LipophilicityGNN.__init__ (must match training config)
+        **model_kwargs: override specific LipophilicityGNN constructor kwargs;
+            normally empty — the checkpoint is self-contained
     Returns:
         LipophilicityGNN : model in eval mode on the requested device
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LipophilicityGNN(**model_kwargs)
-    ckpt_state = torch.load(checkpoint_path, map_location=device)
+    ckpt_state = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model_state = {
         k[len("model.") :]: v
         for k, v in ckpt_state["state_dict"].items()
         if k.startswith("model.")
     }
+
+    # Prefer kwargs embedded by on_save_checkpoint; fall back to inferring
+    # d_h / d_lm / d_hidden from weight shapes for checkpoints that pre-date
+    # this feature.  depth and dropout don't affect tensor shapes so they stay
+    # at their defaults when not stored.
+    if "model_kwargs" in ckpt_state:
+        kwargs = {**ckpt_state["model_kwargs"], **model_kwargs}
+    else:
+        d_h = model_state["backbone.mp.W_o.bias"].shape[0]
+        d_lm = model_state["fusion.net.0.weight"].shape[0] - d_h
+        d_hidden = model_state["fusion.net.1.bias"].shape[0]
+        kwargs = {"d_h": d_h, "d_lm": d_lm, "d_hidden": d_hidden, **model_kwargs}
+
+    model = LipophilicityGNN(**kwargs)
     model.load_state_dict(model_state)
     return model.to(device).eval()

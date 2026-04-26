@@ -4,9 +4,8 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from captum.attr import LayerIntegratedGradients
+from captum.attr import IntegratedGradients
 from rdkit import Chem
-from rdkit.Chem import Draw
 from rdkit.Chem.Draw import rdMolDraw2D
 
 from src.gnn_model import LipophilicityGNN
@@ -27,7 +26,7 @@ def _make_single_loader(smiles: str, lm_emb: np.ndarray):
 
     dataset = build_chemprop_dataset(
         smiles=[smiles],
-        targets=np.array([0.0]),  # placeholder target
+        targets=np.array([0.0]),
         lm_embeddings=lm_emb[np.newaxis],
     )
     return build_dataloader(dataset, batch_size=1, shuffle=False)
@@ -35,24 +34,23 @@ def _make_single_loader(smiles: str, lm_emb: np.ndarray):
 
 class AtomAttributionExplainer:
     """
-    Computes per-atom attribution scores using Captum LayerIntegratedGradients.
+    Computes per-atom attribution scores using Captum IntegratedGradients.
 
-    The target layer is the final output projection of the chemprop MPNN
-    (backbone.mp.W_o), which produces per-atom hidden states after all message
-    passing is complete. IG integrates gradients from a zero-activation baseline
-    to the real activation, giving each atom a signed importance score that
-    reflects its marginal contribution to the predicted logD.
+    IG is applied to the atom feature matrix (bmg.V) with a zero-vector baseline
+    representing an absent atom. At each integration step, bmg.V is replaced with
+    the alpha-scaled atom features so gradients flow through the full message-passing
+    network. Scores are the L2 norm of the attribution tensor over the feature
+    dimension, giving one non-negative scalar per heavy atom.
 
-    Note on layer name: W_o is the assumed attribute name for the final linear
-    projection in chemprop v2's BondMessagePassing. Verify with
-    `list(model.backbone.mp.named_modules())` if attribution fails.
+    This approach avoids the BatchMolGraph-incompatibility of LayerIntegratedGradients,
+    which requires Captum to create baselines from non-tensor inputs.
     """
 
     def __init__(
         self, model: LipophilicityGNN, device: torch.device | None = None
     ) -> None:
         """
-        Attach IntegratedGradients to the MPNN's final atom projection.
+        Initialise IntegratedGradients targeting the atom feature matrix.
 
         Params:
             model: LipophilicityGNN : trained model (must be in eval mode)
@@ -64,10 +62,12 @@ class AtomAttributionExplainer:
         self.device = device or next(model.parameters()).device
         self.model.eval()
 
-        def _forward(bmg, V_d):
-            return self.model(bmg, V_d).squeeze(-1)
+        def _fwd(V: torch.Tensor, bmg, X_d: torch.Tensor | None) -> torch.Tensor:
+            # Patch atom features so IG can vary them along the integration path.
+            bmg.V = V
+            return model(bmg, X_d).squeeze(-1)
 
-        self.lig = LayerIntegratedGradients(_forward, model.backbone.mp.W_o)
+        self.ig = IntegratedGradients(_fwd)
 
     def explain(
         self,
@@ -78,8 +78,9 @@ class AtomAttributionExplainer:
         """
         Return per-atom attribution scores for a single molecule.
 
-        Attribution is the L2 norm of the IG tensor over the hidden-state
-        dimension, giving one non-negative scalar per heavy atom.
+        IG integrates the gradient of the model output w.r.t. the atom feature
+        matrix from a zero baseline to the actual features. Scores are the L2
+        norm over the feature dimension, giving one non-negative value per atom.
 
         Params:
             smiles: str : SMILES string of the molecule to explain
@@ -90,16 +91,25 @@ class AtomAttributionExplainer:
         """
         loader = _make_single_loader(smiles, lm_emb)
         batch = next(iter(loader))
-        bmg = batch.bmg.to(self.device)
+        batch.bmg.to(self.device)  # in-place; returns None
+        bmg = batch.bmg
         X_d = batch.X_d.to(self.device) if batch.X_d is not None else None
 
-        attr = self.lig.attribute(
-            inputs=(bmg, X_d),
+        V = bmg.V.detach().clone()
+        attr = self.ig.attribute(
+            inputs=V,
+            baselines=torch.zeros_like(V),
+            additional_forward_args=(bmg, X_d),
             n_steps=n_steps,
-            attribute_to_layer_input=False,  # attribute to W_o output
+            # One alpha step per forward call so bmg.batch (fixed, single molecule)
+            # stays consistent with the atom count in V.
+            internal_batch_size=1,
         )
-        # attr: (n_atoms, d_h) — aggregate over feature dim
-        scores = torch.norm(attr, dim=-1).detach().cpu().numpy().astype(np.float32)
+        # Sum over the feature dimension to preserve sign:
+        # positive = atom features push logD up (hydrophobic, red)
+        # negative = atom features pull logD down (hydrophilic, blue)
+        # norm() would discard the sign and make everything non-negative.
+        scores = attr.sum(dim=-1).detach().cpu().numpy().astype(np.float32)
         return scores
 
 
@@ -130,17 +140,21 @@ def plot_atom_contributions(
     if mol is None:
         raise ValueError(f"Invalid SMILES: {smiles!r}")
 
-    # Normalise scores symmetrically around zero so red/blue balance makes sense.
     max_abs = float(np.abs(scores).max()) or 1.0
     norm_scores = scores / max_abs  # in [-1, 1]
 
-    cmap = plt.cm.RdBu_r  # red = positive, blue = negative
+    cmap = plt.get_cmap("RdBu_r")  # red = positive, blue = negative
     atom_colours: dict[int, tuple] = {}
+    alpha = 0.5
     for i, s in enumerate(norm_scores):
-        rgba = cmap((s + 1.0) / 2.0)  # map [-1,1] → [0,1]
-        atom_colours[i] = rgba[:3]
+        r, g, b, _ = cmap((s + 1.0) / 2.0)  # map [-1,1] → [0,1]
+        atom_colours[i] = (r, g, b, alpha)
 
-    drawer = rdMolDraw2D.MolDraw2DSVG(*size)
+    import io
+
+    from PIL import Image
+
+    drawer = rdMolDraw2D.MolDraw2DCairo(*size)
     drawer.drawOptions().addAtomIndices = False
     rdMolDraw2D.PrepareAndDrawMolecule(
         drawer,
@@ -151,33 +165,7 @@ def plot_atom_contributions(
         highlightBondColors={},
     )
     drawer.FinishDrawing()
-    svg = drawer.GetDrawingText()
-
-    # Render SVG into a matplotlib figure via a temporary PNG round-trip.
-    import io
-
-    from rdkit.Chem.Draw import MolToImage
-
-    pillow_colours = {
-        i: tuple(int(c * 255) for c in atom_colours[i]) for i in atom_colours
-    }
-    img = MolToImage(
-        mol,
-        size=size,
-        highlightAtoms=list(range(mol.GetNumAtoms())),
-        highlightColor=None,
-    )
-    # Fall back to SVG-based rendering for proper per-atom colouring.
-    try:
-        import cairosvg
-
-        png_bytes = cairosvg.svg2png(bytestring=svg.encode())
-        from PIL import Image
-
-        img = Image.open(io.BytesIO(png_bytes))
-    except ImportError:
-        # cairosvg not available; use simple uniform highlight as fallback.
-        pass
+    img = Image.open(io.BytesIO(drawer.GetDrawingText()))
 
     fig, ax = plt.subplots(figsize=(size[0] / 100, size[1] / 100))
     ax.imshow(img)
@@ -185,7 +173,6 @@ def plot_atom_contributions(
     if title:
         ax.set_title(title, fontsize=10)
 
-    # Colourbar
     sm = plt.cm.ScalarMappable(
         cmap=cmap, norm=mcolors.Normalize(vmin=-max_abs, vmax=max_abs)
     )
