@@ -15,6 +15,7 @@ def _():
     from src.explain import AtomAttributionExplainer, plot_atom_contributions
     from src.gnn_model import LipophilicityGNN
     from src.graph_data import ChemBertaEncoder, build_chemprop_dataset
+    from src.plot_utils import save_fig
     from src.train_gnn import evaluate_gnn, load_checkpoint
 
     return (
@@ -28,6 +29,7 @@ def _():
         np,
         pd,
         plot_atom_contributions,
+        save_fig,
         torch,
     )
 
@@ -119,7 +121,7 @@ def _(mo):
 
 
 @app.cell
-def _(ckpt_input, mo, pd):
+def _(ckpt_input, mo, pd, save_fig):
     def _():
         import glob as _glob
         import os as _os
@@ -181,6 +183,7 @@ def _(ckpt_input, mo, pd):
             _ax.legend(fontsize=9)
 
         plt.tight_layout()
+        save_fig(fig, "03_training_curves")
         return mo.vstack(
             [
                 fig,
@@ -259,7 +262,7 @@ def _(mo):
 
 
 @app.cell
-def _(build_chemprop_dataset, device, lm_embs, mo, model, np, splits, torch):
+def _(build_chemprop_dataset, device, lm_embs, mo, model, np, save_fig, splits, torch):
     def _():
         import matplotlib.pyplot as plt
         from chemprop.data import build_dataloader as _dl
@@ -315,6 +318,7 @@ def _(build_chemprop_dataset, device, lm_embs, mo, model, np, splits, torch):
         ax.set_title("GNN + ChemBERTa — Parity Plot")
         ax.legend(fontsize=9)
         plt.tight_layout()
+        save_fig(fig, "03_parity_plot")
         return mo.vstack([fig])
 
     _()
@@ -342,6 +346,7 @@ def _(
     mo,
     model,
     plot_atom_contributions,
+    save_fig,
     splits,
 ):
     def _():
@@ -362,7 +367,7 @@ def _(
         _labels = ["low", "low", "mid", "mid", "high", "high"]
 
         figs = []
-        for _idx, _lbl in zip(_indices, _labels):
+        for _i, (_idx, _lbl) in enumerate(zip(_indices, _labels)):
             _smi = _test.loc[_idx, "Drug"]
             _y = _test.loc[_idx, "Y"]
             _lm = lm_embs["test"][_idx]
@@ -377,6 +382,7 @@ def _(
                     0.5, 0.5, f"Attribution failed:\n{e}", ha="center", va="center"
                 )
                 _ax.axis("off")
+            save_fig(_fig, f"03_attribution_{_i:02d}_{_lbl}")
             figs.append(_fig)
 
         return mo.vstack([mo.hstack(figs[:3]), mo.hstack(figs[3:])])
@@ -479,6 +485,209 @@ def _(
 
     ablation_df = pd.DataFrame(_ablation_rows)
     mo.vstack([mo.md("### Ablation results"), mo.ui.table(ablation_df)])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ## Split Strategy Comparison
+
+    Load the three checkpoints (one per split strategy) to compare parity plots
+    side by side.  Each model is evaluated on the test set it was trained against,
+    so the scaffold splits measure out-of-distribution generalisation while the
+    random split measures interpolation.
+    """
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    ckpt_tdc = mo.ui.text(
+        label="TDC scaffold checkpoint",
+        value="checkpoints/glorious-dawn-7-epoch=071-val_mae=0.4416.ckpt",
+    )
+    ckpt_rand = mo.ui.text(
+        label="Random checkpoint",
+        value="checkpoints/lyric-voice-8-epoch=097-val_mae=0.3767.ckpt",
+    )
+    ckpt_strat = mo.ui.text(
+        label="Stratified scaffold checkpoint",
+        value="checkpoints/electric-cherry-9-epoch=093-val_mae=0.4148.ckpt",
+    )
+    mo.vstack([ckpt_tdc, ckpt_rand, ckpt_strat])
+    return ckpt_rand, ckpt_strat, ckpt_tdc
+
+
+@app.cell
+def _(
+    ChemBertaEncoder,
+    build_chemprop_dataset,
+    ckpt_rand,
+    ckpt_strat,
+    ckpt_tdc,
+    device,
+    load_checkpoint,
+    mo,
+    np,
+    save_fig,
+    torch,
+):
+    def _():
+        import matplotlib.pyplot as plt
+        from chemprop.data import build_dataloader as _dl
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        from scipy.stats import gaussian_kde
+        from sklearn.metrics import r2_score
+
+        from src.data import get_random_split, get_splits, get_tdc_split
+
+        strategies = [
+            ("TDC scaffold", ckpt_tdc.value.strip(), get_tdc_split),
+            ("Random", ckpt_rand.value.strip(), get_random_split),
+            ("Stratified scaffold", ckpt_strat.value.strip(), get_splits),
+        ]
+        colors = {"train": "#4e79a7", "valid": "#f28e2b", "test": "#e15759"}
+        encoder = ChemBertaEncoder().to(device)
+
+        fig, main_axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        for ax, (label, ckpt_path, split_fn) in zip(main_axes, strategies):
+            divider = make_axes_locatable(ax)
+            ax_top = divider.append_axes("top", size="18%", pad=0.05, sharex=ax)
+            ax_right = divider.append_axes("right", size="18%", pad=0.05, sharey=ax)
+
+            try:
+                _model = load_checkpoint(ckpt_path, device=device)
+            except Exception as e:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"Load failed:\n{e}",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                ax.set_title(label)
+                continue
+
+            _splits = split_fn()
+            _split_data = {}
+            _all_vals = []
+
+            for _split in ("train", "valid", "test"):
+                _lm = encoder.encode(_splits[_split]["Drug"].tolist())
+                _loader = _dl(
+                    build_chemprop_dataset(
+                        _splits[_split]["Drug"],
+                        _splits[_split]["Y"].values.astype(np.float32),
+                        _lm,
+                    ),
+                    batch_size=64,
+                    shuffle=False,
+                )
+                _preds, _targets = [], []
+                _model.eval()
+                with torch.no_grad():
+                    for _batch in _loader:
+                        _batch.bmg.to(device)
+                        _preds.append(
+                            _model(
+                                _batch.bmg,
+                                _batch.X_d.to(device)
+                                if _batch.X_d is not None
+                                else None,
+                            )
+                            .squeeze(-1)
+                            .cpu()
+                            .numpy()
+                        )
+                        _targets.append(_batch.Y.squeeze(-1).numpy())
+                _y_pred = np.concatenate(_preds)
+                _y_true = np.concatenate(_targets)
+                _split_data[_split] = (_y_true, _y_pred)
+                _all_vals += list(_y_true) + list(_y_pred)
+
+            _lo, _hi = min(_all_vals) - 0.3, max(_all_vals) + 0.3
+            _x_range = np.linspace(_lo, _hi, 300)
+
+            for _split in ("train", "valid", "test"):
+                _y_true, _y_pred = _split_data[_split]
+                c = colors[_split]
+                _r2 = r2_score(_y_true, _y_pred)
+                _mu_t, _sd_t = float(_y_true.mean()), float(_y_true.std())
+                _mu_p, _sd_p = float(_y_pred.mean()), float(_y_pred.std())
+
+                ax.scatter(
+                    _y_true,
+                    _y_pred,
+                    alpha=0.25,
+                    s=7,
+                    color=c,
+                    label=f"{_split} R²={_r2:.3f}",
+                )
+
+                _kde_x = gaussian_kde(_y_true, bw_method=0.3)
+                ax_top.plot(_x_range, _kde_x(_x_range), color=c, lw=1.5)
+                ax_top.fill_between(_x_range, _kde_x(_x_range), alpha=0.2, color=c)
+                ax_top.axvline(_mu_t, color=c, lw=1, linestyle=":")
+                ax_top.text(
+                    _mu_t,
+                    0.97,
+                    f"μ={_mu_t:.2f}\nσ={_sd_t:.2f}",
+                    transform=ax_top.get_xaxis_transform(),
+                    fontsize=5.5,
+                    color=c,
+                    ha="center",
+                    va="top",
+                    linespacing=1.3,
+                )
+
+                _kde_y = gaussian_kde(_y_pred, bw_method=0.3)
+                ax_right.plot(_kde_y(_x_range), _x_range, color=c, lw=1.5)
+                ax_right.fill_betweenx(_x_range, _kde_y(_x_range), alpha=0.2, color=c)
+                ax_right.axhline(_mu_p, color=c, lw=1, linestyle=":")
+                ax_right.text(
+                    0.97,
+                    _mu_p,
+                    f"μ={_mu_p:.2f}\nσ={_sd_p:.2f}",
+                    transform=ax_right.get_yaxis_transform(),
+                    fontsize=5.5,
+                    color=c,
+                    ha="right",
+                    va="center",
+                    linespacing=1.3,
+                )
+
+            ax.plot([_lo, _hi], [_lo, _hi], "k--", linewidth=1)
+            ax.set_xlim(_lo, _hi)
+            ax.set_ylim(_lo, _hi)
+            ax.set_aspect("equal")
+            ax.set_xlabel("Actual logD")
+            ax.set_ylabel("Predicted logD")
+            ax.legend(fontsize=7, loc="upper left")
+
+            ax_top.set_title(label, fontsize=10)
+            ax_top.set_xlim(_lo, _hi)
+            ax_top.set_yticks([])
+            ax_top.tick_params(labelbottom=False)
+            for _spine in ax_top.spines.values():
+                _spine.set_visible(False)
+
+            ax_right.set_ylim(_lo, _hi)
+            ax_right.set_xticks([])
+            ax_right.tick_params(labelleft=False)
+            for _spine in ax_right.spines.values():
+                _spine.set_visible(False)
+
+        plt.suptitle("Parity plots by split strategy", fontsize=11, y=1.02)
+        plt.tight_layout()
+        save_fig(fig, "03_comparison_parity")
+        return mo.vstack([fig])
+
+    _()
     return
 
 

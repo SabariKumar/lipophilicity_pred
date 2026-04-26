@@ -8,7 +8,9 @@ app = marimo.App(width="medium")
 def _():
     import marimo as mo
 
-    return (mo,)
+    from src.plot_utils import save_fig
+
+    return mo, save_fig
 
 
 @app.cell
@@ -60,7 +62,7 @@ def _(desc_df, mo):
 
 
 @app.cell
-def _(desc_df, df):
+def _(desc_df, df, save_fig):
     import matplotlib.pyplot as plt
 
     def _():
@@ -81,6 +83,7 @@ def _(desc_df, df):
         axes[1].set_title("Descriptor missingness")
 
         plt.tight_layout()
+        save_fig(fig, "01_target_distribution")
         return fig
 
     _()
@@ -88,7 +91,7 @@ def _(desc_df, df):
 
 
 @app.cell
-def _(desc_df, mo):
+def _(desc_df, mo, save_fig):
     def _():
         import matplotlib.pyplot as plt
         import numpy as np
@@ -116,6 +119,7 @@ def _(desc_df, mo):
         ax.set_title("Per-descriptor variance distribution")
         ax.legend()
         plt.tight_layout()
+        save_fig(fig, "01_descriptor_variance")
         return mo.vstack(
             [
                 fig,
@@ -130,7 +134,7 @@ def _(desc_df, mo):
 
 
 @app.cell
-def _(df, mo):
+def _(df, mo, save_fig):
     def _():
         import matplotlib.pyplot as plt
 
@@ -145,6 +149,7 @@ def _(df, mo):
         ax.set_xlabel("Number of molecules")
         ax.set_title("Functional group prevalence across dataset")
         plt.tight_layout()
+        save_fig(fig, "01_functional_groups")
         return mo.vstack(
             [
                 fig,
@@ -159,7 +164,7 @@ def _(df, mo):
 
 
 @app.cell
-def _(desc_df, df):
+def _(desc_df, df, save_fig):
     def _():
         import matplotlib.pyplot as plt
 
@@ -171,6 +176,94 @@ def _(desc_df, df):
         ax.set_ylabel("Count")
         ax.set_title(f"ClogP distribution (n={len(clogp):,} / {len(df):,})")
         plt.tight_layout()
+        save_fig(fig, "01_clogp_distribution")
+        return fig
+
+    _()
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ## Split Strategy Comparison
+
+    The original TDC scaffold split assigns scaffold groups to splits without
+    balancing the logD distribution.  The stratified scaffold split bins
+    scaffold groups by median logD before assigning them, so each split sees
+    a representative slice of the target range.
+    """
+    )
+    return
+
+
+@app.cell
+def _(df, mo, save_fig):
+    def _():
+        import matplotlib.pyplot as plt
+        from tdc.single_pred import ADME
+
+        from src.data import get_random_split, get_splits
+
+        tdc_split = ADME(name="Lipophilicity_AstraZeneca").get_split(
+            method="scaffold", seed=42
+        )
+        rand_split = get_random_split(seed=42)
+        strat_split = get_splits(seed=42)
+
+        strategies = [
+            ("TDC scaffold", tdc_split),
+            ("Random", rand_split),
+            ("Stratified scaffold", strat_split),
+        ]
+        split_names = ("train", "valid", "test")
+        colors = {"train": "#4e79a7", "valid": "#f28e2b", "test": "#e15759"}
+
+        fig, axes = plt.subplots(3, 3, figsize=(13, 9), sharey=False)
+        bins = 35
+        overall_y = df["Y"].values
+
+        for col, split in enumerate(split_names):
+            for row, (label, splits_dict) in enumerate(strategies):
+                ax = axes[row, col]
+                y = splits_dict[split]["Y"].values
+                ax.hist(
+                    overall_y,
+                    bins=bins,
+                    color="lightgrey",
+                    edgecolor="white",
+                    linewidth=0.3,
+                    label="full dataset",
+                    zorder=1,
+                )
+                ax.hist(
+                    y,
+                    bins=bins,
+                    color=colors[split],
+                    alpha=0.75,
+                    edgecolor="white",
+                    linewidth=0.3,
+                    label=split,
+                    zorder=2,
+                )
+                ax.set_title(
+                    f"{label} — {split}\n"
+                    f"n={len(y)}  mean={y.mean():.2f}  std={y.std():.2f}",
+                    fontsize=9,
+                )
+                ax.set_xlabel("logD")
+                ax.set_ylabel("Count")
+                if col == 0:
+                    ax.legend(fontsize=8)
+
+        plt.suptitle(
+            "logD distribution per split: TDC scaffold (top) · random (middle) · stratified scaffold (bottom)",
+            fontsize=10,
+            y=1.01,
+        )
+        plt.tight_layout()
+        save_fig(fig, "01_split_comparison")
         return fig
 
     _()

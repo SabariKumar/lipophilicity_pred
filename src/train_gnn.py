@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from src.data import get_splits
+from src.data import get_random_split, get_splits, get_tdc_split
 from src.gnn_model import LipophilicityGNN
 from src.graph_data import ChemBertaEncoder, build_chemprop_dataset
 
@@ -71,6 +71,7 @@ class GNNLitModule(L.LightningModule):
         weight_decay: float = 1e-4,
         t_max: int = 100,
         model_kwargs: dict | None = None,
+        split: str = "stratified_scaffold",
     ) -> None:
         """
         Wrap a LipophilicityGNN for Lightning training.
@@ -82,6 +83,7 @@ class GNNLitModule(L.LightningModule):
             t_max: int : CosineAnnealingLR period in epochs
             model_kwargs: dict | None : LipophilicityGNN constructor kwargs, embedded
                 in the checkpoint so load_checkpoint can reconstruct the architecture
+            split: str : split strategy used for training, embedded in the checkpoint
         Returns:
             None
         """
@@ -92,6 +94,7 @@ class GNNLitModule(L.LightningModule):
         self.t_max = t_max
         self.loss_fn = nn.MSELoss()
         self._model_kwargs: dict = model_kwargs or {}
+        self._split = split
 
     def on_save_checkpoint(self, checkpoint: dict) -> None:
         """
@@ -103,6 +106,7 @@ class GNNLitModule(L.LightningModule):
             None
         """
         checkpoint["model_kwargs"] = self._model_kwargs
+        checkpoint["split"] = self._split
 
     def _step(self, batch, split: str) -> torch.Tensor:
         bmg = batch.bmg
@@ -202,6 +206,7 @@ def train_gnn(
         "patience": 20,
         "checkpoint_path": None,
         "seed": 42,
+        "split": "stratified_scaffold",
     }
     if config:
         cfg.update(config)
@@ -212,7 +217,16 @@ def train_gnn(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Data ---
-    splits = get_splits(seed=cfg["seed"])
+    _split_fns = {
+        "stratified_scaffold": get_splits,
+        "random": get_random_split,
+        "tdc_scaffold": get_tdc_split,
+    }
+    if cfg["split"] not in _split_fns:
+        raise ValueError(
+            f"Unknown split method '{cfg['split']}'. Choose from: {list(_split_fns)}"
+        )
+    splits = _split_fns[cfg["split"]](seed=cfg["seed"])
     encoder = ChemBertaEncoder().to(device)
 
     lm_embs = {
@@ -254,6 +268,7 @@ def train_gnn(
         weight_decay=cfg["weight_decay"],
         t_max=cfg["max_epochs"],
         model_kwargs=model_kwargs,
+        split=cfg["split"],
     )
 
     # --- Loggers ---
