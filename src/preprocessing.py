@@ -15,7 +15,7 @@ def build_preprocessor(X_train: pd.DataFrame) -> Pipeline:
     """
     pipe = Pipeline(
         [
-            ("variance", VarianceThreshold(threshold=0.0)),
+            ("variance", VarianceThreshold(threshold=0.01)),
             ("imputer", SimpleImputer(strategy="median")),
         ]
     )

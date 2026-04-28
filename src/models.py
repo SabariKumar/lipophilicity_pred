@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LassoCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -26,22 +27,39 @@ def fit_lasso(X: np.ndarray, y: np.ndarray) -> Pipeline:
 
 
 def fit_rf(X: np.ndarray, y: np.ndarray) -> RandomForestRegressor:
-    """Fit a random forest regressor on training data.
+    """Fit a random forest regressor with randomised hyperparameter search.
+
+    Searches over max_depth, min_samples_leaf, and max_features using 5-fold
+    cross-validation scored by RMSE, then returns the best estimator.
 
     Params:
         X: np.ndarray : training feature matrix, shape (n_samples, n_features)
         y: np.ndarray : training targets, shape (n_samples,)
     Returns:
-        RandomForestRegressor : fitted model
+        RandomForestRegressor : best fitted estimator from the search
     """
-    model = RandomForestRegressor(
+    param_dist = {
+        "max_depth": [8, 12, 16, None],
+        "min_samples_leaf": [1, 3, 5, 10],
+        "max_features": ["sqrt", 0.33, 0.5],
+    }
+    base = RandomForestRegressor(
         n_estimators=500,
-        max_features=0.33,
-        n_jobs=-1,
         random_state=42,
+        n_jobs=1,
     )
-    model.fit(X, y)
-    return model
+    search = RandomizedSearchCV(
+        base,
+        param_distributions=param_dist,
+        n_iter=20,
+        cv=5,
+        scoring="neg_root_mean_squared_error",
+        random_state=42,
+        n_jobs=-1,
+    )
+    search.fit(X, y)
+    print(f"Best RF params: {search.best_params_}  CV RMSE: {-search.best_score_:.4f}")
+    return search.best_estimator_
 
 
 def evaluate(model, X: np.ndarray, y: np.ndarray) -> dict:

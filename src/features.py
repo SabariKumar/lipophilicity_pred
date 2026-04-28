@@ -30,12 +30,17 @@ def get_mol_descriptors(mol, missingVal=None) -> dict:
     return res
 
 
+# Descriptors that directly encode logP and would leak the target (logD ≈ logP + ionisation correction).
+_LEAKY_DESCRIPTORS: frozenset[str] = frozenset({"MolLogP"})
+
+
 def smiles_to_descriptors(smiles: pd.Series) -> pd.DataFrame:
     """
     Compute RDKit descriptors for a Series of SMILES strings.
 
     Invalid SMILES produce a row of NaN rather than being dropped, preserving
-    index alignment with the input for safe downstream merging.
+    index alignment with the input for safe downstream merging. Descriptors in
+    _LEAKY_DESCRIPTORS are excluded from the output to prevent target leakage.
 
     Params:
         smiles: pd.Series : SMILES strings, any index
@@ -52,7 +57,8 @@ def smiles_to_descriptors(smiles: pd.Series) -> pd.DataFrame:
         else:
             records.append(get_mol_descriptors(mol))
 
-    return pd.DataFrame(records, index=smiles.index)
+    df = pd.DataFrame(records, index=smiles.index)
+    return df.drop(columns=[c for c in _LEAKY_DESCRIPTORS if c in df.columns])
 
 
 def smiles_to_fgs(smiles: pd.Series) -> pd.DataFrame:

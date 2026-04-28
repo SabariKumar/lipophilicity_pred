@@ -141,11 +141,23 @@ def _(df, mo, save_fig):
         from src.features import smiles_to_fgs
 
         fg_df = smiles_to_fgs(df["Drug"])
+        fg_df = fg_df[[c for c in fg_df.columns if "." not in c]]
 
         counts = fg_df.sum().sort_values(ascending=True)
+        count_vals = counts.to_numpy(dtype=int)
 
         fig, ax = plt.subplots(figsize=(8, max(4, len(counts) * 0.22)))
-        ax.barh(counts.index, counts.values)
+        ax.barh(counts.index, count_vals)
+        for val, patch in zip(count_vals, ax.patches):
+            ax.text(
+                patch.get_width() + count_vals.max() * 0.01,
+                patch.get_y() + patch.get_height() / 2,
+                str(val),
+                va="center",
+                ha="left",
+                fontsize=8,
+            )
+        ax.set_xlim(right=count_vals.max() * 1.12)
         ax.set_xlabel("Number of molecules")
         ax.set_title("Functional group prevalence across dataset")
         plt.tight_layout()
@@ -167,16 +179,62 @@ def _(df, mo, save_fig):
 def _(desc_df, df, save_fig):
     def _():
         import matplotlib.pyplot as plt
+        import numpy as np
 
-        clogp = desc_df["MolLogP"].dropna()
+        clogp = desc_df["MolLogP"].dropna().to_numpy()
+        logd = df["Y"].dropna().to_numpy()
+
+        bins = np.linspace(
+            min(clogp.min(), logd.min()) - 0.5,
+            max(clogp.max(), logd.max()) + 0.5,
+            45,
+        )
 
         fig, ax = plt.subplots(figsize=(7, 4))
-        ax.hist(clogp, bins=40, edgecolor="white", linewidth=0.4)
-        ax.set_xlabel("ClogP (MolLogP)")
-        ax.set_ylabel("Count")
-        ax.set_title(f"ClogP distribution (n={len(clogp):,} / {len(df):,})")
+        ax.hist(
+            clogp,
+            bins=bins,
+            density=True,
+            alpha=0.6,
+            edgecolor="white",
+            linewidth=0.4,
+            label=f"ClogP (n={len(clogp):,})",
+        )
+        ax.hist(
+            logd,
+            bins=bins,
+            density=True,
+            alpha=0.6,
+            edgecolor="white",
+            linewidth=0.4,
+            label=f"logD (n={len(logd):,})",
+        )
+        ax.set_xlabel("Value")
+        ax.set_ylabel("Density")
+        ax.set_title("ClogP vs. logD distribution")
+        ax.legend()
         plt.tight_layout()
         save_fig(fig, "01_clogp_distribution")
+        return fig
+
+    _()
+    return
+
+
+@app.cell
+def _(desc_df, df, save_fig):
+    def _():
+        import matplotlib.pyplot as plt
+
+        mw = desc_df["MolWt"].dropna()
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.hist(mw, bins=40, edgecolor="white", linewidth=0.4)
+        ax.set_xlabel("Molecular weight (Da)")
+        ax.set_ylabel("Count")
+        ax.set_title(f"Molecular weight distribution (n={len(mw):,} / {len(df):,})")
+        plt.tight_layout()
+        save_fig(fig, "01_mw_distribution")
         return fig
 
     _()
@@ -199,7 +257,7 @@ def _(mo):
 
 
 @app.cell
-def _(df, mo, save_fig):
+def _(df, save_fig):
     def _():
         import matplotlib.pyplot as plt
         from tdc.single_pred import ADME
@@ -264,6 +322,141 @@ def _(df, mo, save_fig):
         )
         plt.tight_layout()
         save_fig(fig, "01_split_comparison")
+        return fig
+
+    _()
+    return
+
+
+@app.cell
+def _(save_fig):
+    def _():
+        from collections import Counter
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from rdkit import Chem
+        from rdkit.Chem.Scaffolds import MurckoScaffold
+        from tdc.single_pred import ADME
+
+        from src.data import get_random_split, get_splits
+
+        tdc_split = ADME(name="Lipophilicity_AstraZeneca").get_split(
+            method="scaffold", seed=42
+        )
+        rand_split = get_random_split(seed=42)
+        strat_split = get_splits(seed=42)
+
+        strategies = [
+            ("TDC scaffold", tdc_split),
+            ("Random", rand_split),
+            ("Stratified scaffold", strat_split),
+        ]
+        split_names = ("train", "valid", "test")
+        colors = {"train": "#4e79a7", "valid": "#f28e2b", "test": "#e15759"}
+
+        def scaffold_cluster_sizes(smiles_list):
+            scaffolds = []
+            for smi in smiles_list:
+                mol = Chem.MolFromSmiles(smi)
+                if mol is None:
+                    scaffolds.append("")
+                    continue
+                scaffolds.append(MurckoScaffold.MurckoScaffoldSmiles(mol=mol))
+            counts = Counter(scaffolds)
+            return np.array(list(counts.values()), dtype=int)
+
+        fig, axes = plt.subplots(3, 3, figsize=(13, 9), sharey=True)
+
+        for col, split in enumerate(split_names):
+            for row, (label, splits_dict) in enumerate(strategies):
+                ax = axes[row, col]
+                smiles = splits_dict[split]["Drug"].tolist()
+                sizes = scaffold_cluster_sizes(smiles)
+                n_unique = len(sizes)
+                pct_singleton = 100 * (sizes == 1).sum() / n_unique
+
+                ax.hist(
+                    sizes,
+                    bins=range(1, sizes.max() + 2),
+                    align="left",
+                    color=colors[split],
+                    edgecolor="white",
+                    linewidth=0.4,
+                )
+                ax.set_title(
+                    f"{label} — {split}  |  {n_unique} scaffolds, {pct_singleton:.0f}% singletons",
+                    fontsize=9,
+                )
+                ax.set_xlabel("Molecules per scaffold")
+                ax.set_ylabel("Number of scaffolds")
+                ax.set_yscale("log")
+
+        plt.suptitle(
+            "Murcko scaffold cluster-size distribution: TDC scaffold (top) · random (middle) · stratified scaffold (bottom)",
+            fontsize=10,
+            y=1.01,
+        )
+        plt.tight_layout()
+        save_fig(fig, "01_scaffold_diversity")
+        return fig
+
+    _()
+    return
+
+
+@app.cell
+def _(save_fig):
+    def _():
+        import matplotlib.pyplot as plt
+        from matplotlib_venn import venn3
+        from rdkit import Chem
+        from rdkit.Chem.Scaffolds import MurckoScaffold
+        from tdc.single_pred import ADME
+
+        from src.data import get_random_split, get_splits
+
+        tdc_split = ADME(name="Lipophilicity_AstraZeneca").get_split(
+            method="scaffold", seed=42
+        )
+        rand_split = get_random_split(seed=42)
+        strat_split = get_splits(seed=42)
+
+        strategies = [
+            ("TDC scaffold", tdc_split),
+            ("Random", rand_split),
+            ("Stratified scaffold", strat_split),
+        ]
+        colors = {"train": "#4e79a7", "valid": "#f28e2b", "test": "#e15759"}
+
+        def scaffold_set(smiles_list):
+            out = set()
+            for smi in smiles_list:
+                mol = Chem.MolFromSmiles(smi)
+                if mol is None:
+                    continue
+                out.add(MurckoScaffold.MurckoScaffoldSmiles(mol=mol))
+            return out
+
+        fig, axes = plt.subplots(1, 3, figsize=(13, 4))
+        for ax, (label, splits_dict) in zip(axes, strategies):
+            tr = scaffold_set(splits_dict["train"]["Drug"])
+            va = scaffold_set(splits_dict["valid"]["Drug"])
+            te = scaffold_set(splits_dict["test"]["Drug"])
+            v = venn3(
+                [tr, va, te],
+                set_labels=("train", "valid", "test"),
+                set_colors=(colors["train"], colors["valid"], colors["test"]),
+                alpha=0.6,
+                ax=ax,
+            )
+            ax.set_title(
+                f"{label}  |  {len(tr | va | te)} unique scaffolds", fontsize=10
+            )
+
+        fig.suptitle("Murcko scaffold overlap between splits", fontsize=12)
+        plt.tight_layout()
+        save_fig(fig, "01_scaffold_venn")
         return fig
 
     _()
