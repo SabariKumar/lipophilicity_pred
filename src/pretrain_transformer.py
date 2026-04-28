@@ -145,6 +145,15 @@ class PretrainLitModule(L.LightningModule):
         checkpoint["qm9_split"] = self.qm9_split
 
     def _step(self, batch: dict, split: str) -> torch.Tensor:
+        """
+        Compute multi-task MSE loss and log per-target MAE for a single batch.
+
+        Params:
+            batch: dict : dict with 'input_ids', 'attention_mask', 'labels'
+            split: str : one of 'train', 'val'; used as metric-name prefix
+        Returns:
+            torch.Tensor : scalar MSE loss averaged over targets and samples
+        """
         preds = self.model(batch["input_ids"], batch["attention_mask"])
         loss = self.loss_fn(preds, batch["labels"])
         # Per-target MAE for interpretability in wandb
