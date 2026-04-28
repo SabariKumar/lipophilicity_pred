@@ -139,6 +139,15 @@ class FinetuneLitModule(L.LightningModule):
         checkpoint["pretrain_targets"] = self._pretrain_targets
 
     def _step(self, batch: dict, split: str) -> torch.Tensor:
+        """
+        Compute MSE loss and log MAE for a single logD batch.
+
+        Params:
+            batch: dict : dict with 'input_ids', 'attention_mask', 'label'
+            split: str : one of 'train', 'val'; used as metric-name prefix
+        Returns:
+            torch.Tensor : scalar MSE loss
+        """
         preds = self.model(batch["input_ids"], batch["attention_mask"]).squeeze(-1)
         targets = batch["label"]
         loss = self.loss_fn(preds, targets)

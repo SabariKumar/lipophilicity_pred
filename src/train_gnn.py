@@ -109,6 +109,15 @@ class GNNLitModule(L.LightningModule):
         checkpoint["split"] = self._split
 
     def _step(self, batch, split: str) -> torch.Tensor:
+        """
+        Compute MSE loss and log MAE for a single batch.
+
+        Params:
+            batch: Any : chemprop TrainingBatch
+            split: str : one of 'train', 'val', 'test'; used as metric-name prefix
+        Returns:
+            torch.Tensor : scalar MSE loss
+        """
         bmg = batch.bmg
         X_d = batch.X_d
         Y = batch.Y.float()

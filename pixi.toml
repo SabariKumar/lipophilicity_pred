@@ -48,6 +48,7 @@ pre-commit = ">=4.6.0,<5"
 lipophilicity-pred = { path = ".", editable = true }
 chemprop = ">=2.0"
 captum = ">=0.7"
+matplotlib-venn = ">=0.11"
 
 [tasks]
 # Run once after `pixi install` to get the pre-built DGL wheel for the installed torch+CUDA version
@@ -62,7 +63,9 @@ setup-dgl = """
 setup-tdc = "python -m pip install PyTDC --no-deps"
 
 # --- training ---
-train-gnn = "python scripts/train_gnn.py"
+train-gnn     = "python scripts/train_gnn.py"
+ensemble-gnn  = "python scripts/ensemble_gnn.py"
+evaluate-uq   = "python scripts/evaluate_uq.py"
 
 # --- transformer pretraining / fine-tuning ---
 # Phase 1: pretrain on QM9 (pass --targets to run ablations)
@@ -75,6 +78,7 @@ finetune-transformer  = "python scripts/finetune_logd.py"
 notebook-gnn         = "marimo edit --no-token notebooks/03_gnn_model.py"
 notebook-eda         = "marimo edit --no-token notebooks/01_descriptors.py"
 notebook-transformer = "marimo edit --no-token notebooks/04_transformer.py"
+notebook-uq          = "marimo edit --no-token notebooks/05_uq_analysis.py"
 
 # --- tests ---
 test = "pytest tests/ -v"
