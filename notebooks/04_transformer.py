@@ -19,17 +19,7 @@ def _():
     from src.plot_utils import save_fig
     from src.qm9_data import QM9_TARGETS
 
-    return (
-        LogDDataset,
-        QM9_TARGETS,
-        evaluate_transformer,
-        load_finetuned_model,
-        mo,
-        np,
-        pd,
-        save_fig,
-        torch,
-    )
+    return LogDDataset, evaluate_transformer, mo, np, pd, save_fig, torch
 
 
 @app.cell
@@ -50,7 +40,7 @@ def _(mo):
 
 
 @app.cell
-def _(mo, QM9_TARGETS):
+def _(mo):
     from src.qm9_data import QM9_TARGETS as _ALL
 
     _group_options = {
@@ -69,12 +59,16 @@ def _(mo, QM9_TARGETS):
         for label in _group_options
     }
     mo.vstack(list(ablation_inputs.values()))
-    return ablation_inputs, _group_options
+    return (ablation_inputs,)
 
 
 @app.cell
 def _(mo):
-    mo.md("## Per-Split Metrics")
+    mo.md(
+        """
+    ## Per-Split Metrics
+    """
+    )
     return
 
 
@@ -123,7 +117,11 @@ def _(LogDDataset, ablation_inputs, evaluate_transformer, mo, pd, torch):
 
 @app.cell
 def _(mo):
-    mo.md("## Parity Plots by Pretraining Condition")
+    mo.md(
+        """
+    ## Parity Plots by Pretraining Condition
+    """
+    )
     return
 
 
@@ -285,7 +283,11 @@ def _(LogDDataset, ablation_inputs, mo, np, save_fig, torch):
 
 @app.cell
 def _(mo):
-    mo.md("## Training Curves")
+    mo.md(
+        """
+    ## Training Curves
+    """
+    )
     return
 
 
